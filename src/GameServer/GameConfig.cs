@@ -144,12 +144,10 @@ namespace Weedwacker.GameServer
                 public string Title = "Welcome to Weedwacker!";
                 public string Content = "Hi there!\r\nFirst of all, welcome to Weedwacker. If you have any issues, please let us know so that Primrose can help you!";
                 public string Sender = "Primrose";
-                /*
                 public Weedwacker.game.mail.Mail.MailItem[] items = {
                 new Weedwacker.game.mail.Mail.MailItem(13509, 1, 1),
                 new Weedwacker.game.mail.Mail.MailItem(201, 99999, 1)
                 };
-                */
             }
         }
 
