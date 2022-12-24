@@ -2,9 +2,9 @@ name: .NET Core Desktop Ubuntu Builder
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main","3.3" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main","3.3" ]
 
 jobs:
 
