@@ -163,7 +163,7 @@ namespace Weedwacker.GameServer
         }
 
 
-        /* Objects. */
+        /* Objects.*/
 
         public new class Region
         {
