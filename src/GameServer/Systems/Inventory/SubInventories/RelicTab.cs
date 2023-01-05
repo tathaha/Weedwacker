@@ -3,6 +3,7 @@ using MongoDB.Driver;
 using Weedwacker.GameServer.Data;
 using Weedwacker.GameServer.Database;
 using Weedwacker.GameServer.Enums;
+using Weedwacker.GameServer.Packet.Send;
 using Weedwacker.Shared.Utils;
 
 namespace Weedwacker.GameServer.Systems.Inventory
@@ -101,6 +102,9 @@ namespace Weedwacker.GameServer.Systems.Inventory
                 await DatabaseManager.UpdateInventoryAsync(filter2, update2);
 
                 Items.Remove((relic as ReliquaryItem).Id);
+                Inventory.GuidMap.Remove(relic.Guid);
+                relic.Count = 0;
+                await Owner.SendPacketAsync(new PacketStoreItemDelNotify(relic));
                 return true;
             }
             else if (UpgradeMaterials.TryGetValue((item as MaterialItem).ItemId, out MaterialItem material))
@@ -114,6 +118,7 @@ namespace Weedwacker.GameServer.Systems.Inventory
                     var update2 = Builders<InventoryManager>.Update.Set($"{mongoPathToItems}.{nameof(UpgradeMaterials)}.{material.ItemId}.{nameof(GameItem.Count)}", material.Count);
                     await DatabaseManager.UpdateInventoryAsync(filter2, update2);
 
+                    await Owner.SendPacketAsync(new PacketStoreItemChangeNotify(material));
                     return true;
                 }
                 else if (material.Count - count == 0)
@@ -122,8 +127,11 @@ namespace Weedwacker.GameServer.Systems.Inventory
                     var filter2 = Builders<InventoryManager>.Filter.Where(w => w.OwnerId == Owner.GameUid);
                     var update2 = Builders<InventoryManager>.Update.Unset($"{mongoPathToItems}.{nameof(Items)}.{material.ItemId}");
                     await DatabaseManager.UpdateInventoryAsync(filter2, update2);
-
+                  
                     UpgradeMaterials.Remove(material.ItemId);
+                    material.Count = 0;
+                    Inventory.GuidMap.Remove(material.Guid);
+                    await Owner.SendPacketAsync(new PacketStoreItemDelNotify(material));
                     return true;
                 }
                 else
@@ -137,6 +145,44 @@ namespace Weedwacker.GameServer.Systems.Inventory
                 Logger.WriteErrorLine("Tried to remove inexistent item");
                 return false;
             }
+        }
+
+        public async Task<bool> EquipRelic(ulong avatarGuid, ulong equipGuid)
+        {
+            Avatar.Avatar? avatar = Owner.Avatars.GetAvatarByGuid(avatarGuid);
+
+            if (avatar != null && Inventory.GuidMap.TryGetValue(equipGuid, out GameItem relic) && relic.ItemData.itemType == ItemType.ITEM_RELIQUARY)
+            {
+                ReliquaryItem asRelic = (ReliquaryItem)relic;
+                // Is it equipped ot another avatar?
+                Avatar.Avatar? otherAvatar = Owner.Avatars.Avatars.Values.Where(a => a.GetRelic(asRelic.ItemData.equipType) == asRelic && a != avatar).FirstOrDefault();
+                if (otherAvatar != null)
+                {
+                    await UnequipRelicAsync(otherAvatar.Guid, asRelic.ItemData.equipType);
+                }
+
+                if (await avatar.EquipRelic(asRelic, true))
+                {
+                    asRelic.EquippedAvatar = avatar.AvatarId;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        public async Task<bool> UnequipRelicAsync(ulong avatarGuid, EquipType slot)
+        {
+            Avatar.Avatar? avatar = Owner.Avatars.GetAvatarByGuid(avatarGuid);
+
+            if (avatar != null && slot != EquipType.EQUIP_WEAPON)
+            {
+
+                return await avatar.UnequipRelic(slot);
+
+            }
+
+            return false;
         }
     }
 }

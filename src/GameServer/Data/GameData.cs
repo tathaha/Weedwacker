@@ -95,6 +95,7 @@ namespace Weedwacker.GameServer.Data
         public readonly static ConcurrentDictionary<string, BaseConfigTalent[]> WeaponAffixConfigDataMap = new(); // openConfig
         public readonly static SortedList<int, WeaponCurveData> WeaponCurveDataMap = new(); // level
         public readonly static SortedList<Tuple<int, int>, WeaponPromoteData> WeaponPromoteDataMap = new(); // <weaponPromoteId, promoteLevel>
+        public readonly static SortedList<int, WeaponLevelData> WeaponLevelDataMap = new();  // level
         public readonly static SortedList<int, WeatherData> WeatherDataMap = new(); // areaId
 
         private readonly static SortedList<int, SceneInfo> SceneScripts = new();
@@ -155,7 +156,11 @@ namespace Weedwacker.GameServer.Data
                     typeof(RelyOnElementMixin), typeof(TriggerBeHitSupportMixin), typeof(TileAttackMixin), typeof(ElectricCoreLineMixin), typeof(TileComplexManagerMixin),
                     typeof(StreamingModifierMixin), typeof(ElectricCoreMoveMixin), typeof(DoTileActionManagerMixin), typeof(AttachModifierToSelfGlobalValueAndTalkStateMixin),
                     typeof(ElementReactionShockMixin), typeof(EnableSprintInBlackMudMixin), typeof(AttachModifierToSelfGlobalValueAndTalkStateNoInitMixin),
-                    typeof(AttackCostElementMixin),
+                    typeof(AttackCostElementMixin), typeof(CountCheckEventMixin), typeof(SwitchSkillIconMixin), typeof(DoActionBySelfElementReactionMixin),
+                    typeof(AttachToStateGroupNormalizedTimeMixin), typeof(OverrideAvatarMoveSpeedRatioMixin), typeof(AttackChainReceiverMixin), typeof(AttackChainMixin),
+                    typeof(ModifyBeHitDamageMixin), typeof(DoActionByAimMixin), typeof(NahidaAimNpcGatherMixin), typeof(DisableMotionBlurMixin), typeof(NahidaHollowFlowerMixin),
+                    typeof(HittingOtherMixin), typeof(AvatarStrafeMixin), typeof(AvatarStrafeFuelMixin), typeof(OverrideHitImpulseMixin), 
+
                     // Actions
                     typeof(SetAnimatorTrigger), typeof(SetAnimatorInt), typeof(SetAnimatorBool), typeof(SetCameraLockTime), typeof(ResetAnimatorTrigger), typeof(RemoveModifier),
                     typeof(ApplyModifier), typeof(TriggerBullet), typeof(EntityDoSkill), typeof(AvatarSkillStart), typeof(Predicated), typeof(SetGlobalValue), typeof(AttachModifier),
@@ -198,7 +203,10 @@ namespace Weedwacker.GameServer.Data
                     typeof(TriggerUGCGadgetMove), typeof(PaimonAction), typeof(SetPaimonTempOffset), typeof(FireFishingEvent), typeof(AvatarEnterViewBias), typeof(WidgetSkillStart),
                     typeof(AvatarExitViewBias), typeof(CaptureAnimal), typeof(AvatarShareCDSkillStart), typeof(SetPaimonLookAtCamera), typeof(UpdateReactionDamage), typeof(ApplyLevelModifier),
                     typeof(FireEffectForStorm), typeof(SendEvtElectricCoreMoveEnterP1), typeof(SendEvtElectricCoreMoveInterrupt), typeof(DoTileAction), typeof(SetCrashDamage),
-                    typeof(SetCrystalShieldHpToOverrideMap), typeof(FireGainCrystalSeedEvent),
+                    typeof(SetCrystalShieldHpToOverrideMap), typeof(FireGainCrystalSeedEvent), typeof(SetBulletTrackTarget), typeof(ManipulateStrafeStamina), typeof(SetCameraEntityDampRatio),
+                    typeof(TryTriggerTrampolineJump), typeof(NotifyNahidaTrigger), typeof(TriggerGatherCollect), typeof(SetTeamFightPropertyToOverrideMapKey), typeof(GetStrafeStaminaToGlobalValue), 
+
+
                     // Predicate
                     typeof(ByAny), typeof(ByAnimatorInt), typeof(ByLocalAvatarStamina), typeof(ByEntityAppearVisionType), typeof(ByTargetGlobalValue),typeof(ByTargetPositionToSelfPosition),
                     typeof(ByCurrentSceneId), typeof(ByEntityTypes), typeof(ByIsTargetCamp), typeof(ByCurTeamHasFeatureTag), typeof(ByTargetHPRatio), typeof(BySkillReady), typeof(ByItemNumber),
@@ -211,7 +219,7 @@ namespace Weedwacker.GameServer.Data
                     typeof(ByTargetInArea), typeof(ByHasTag), typeof(ByCurrentSceneTypes), typeof(ByIsGadgetExistAround), typeof(ByHostOrGuest), typeof(ByBigTeamHasElementType), typeof(ByDungeonSettled),
                     typeof(ByHasLevelTag), typeof(ByHasShield), typeof(ByEquipAffixReady), typeof(ByTargetElement), typeof(ByCurTeamHasElementType), typeof(ByHitBoxName), typeof(ByHitImpulse),
                     typeof(BySceneSurfaceType), typeof(ByHasShieldV2), typeof(ByAnimatorFloat), typeof(ByTargetLayoutArea), typeof(ByEnergy), typeof(ByStageIsReadyTemp), typeof(ByScenePropState),
-                    typeof(BySelfForwardAndTargetPosition), typeof(ByFindBlinkPointSuccess), typeof(ByElementTriggerEntityType), typeof(ByElementReactionType), typeof(ByElementReactionSourceType),
+                    typeof(BySelfForwardAndTargetPosition), typeof(ByFindBlinkPointSuccess), typeof(ByElementTriggerEntityType), typeof(ByElementReactionType), typeof(ByElementReactionSourceType), typeof(ByTrampolineType), 
                     // BornType
                     typeof(ConfigBornByTarget), typeof(ConfigBornByAttachPoint), typeof(ConfigBornBySelf), typeof(ConfigBornByCollisionPoint), typeof(ConfigBornBySelectedPoint),
                     typeof(ConfigBornByGlobalValue), typeof(ConfigBornBySelfOwner), typeof(ConfigBornByTargetLinearPoint), typeof(ConfigBornByHitPoint), typeof(ConfigBornByPredicatePoint),
@@ -254,7 +262,7 @@ namespace Weedwacker.GameServer.Data
             foreach (var fileAndPath in dirs)
             {
                 string fullPath = Path.GetFullPath(fileAndPath);
-                int sceneId = int.Parse(fullPath.Split("\\").Last());
+                int sceneId = int.Parse(fullPath.Split(Path.DirectorySeparatorChar).Last());
                 if (GameServer.Configuration.Server.DynamicLoadScenes && sceneId != 3) continue;
                 tasks.Add(LoadSceneScripts(sceneId, path));
             }
@@ -422,6 +430,7 @@ namespace Weedwacker.GameServer.Data
                 LoadExcel(excelPath, o => o.id, ReliquaryAffixDataMap),
                 LoadExcel(excelPath, o => o.id, ReliquaryMainPropDataMap),
                 LoadExcel(excelPath, o => Tuple.Create(o.rank, o.level), ReliquaryLevelDataMap),
+                LoadExcel(excelPath, o => o.level, WeaponLevelDataMap),
                 LoadExcel(excelPath, o => o.setId, ReliquarySetDataMap),
                 LoadExcel(excelPath, o => o.rewardId, RewardDataMap),
                 LoadExcel(excelPath, o => o.id, SceneDataMap),

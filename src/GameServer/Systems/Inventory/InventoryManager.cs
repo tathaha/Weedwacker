@@ -4,6 +4,7 @@ using Weedwacker.GameServer.Data.Common;
 using Weedwacker.GameServer.Data.Excel;
 using Weedwacker.GameServer.Enums;
 using Weedwacker.GameServer.Packet.Send;
+using Weedwacker.Shared.Network.Proto;
 using Weedwacker.Shared.Utils;
 
 namespace Weedwacker.GameServer.Systems.Inventory
@@ -28,7 +29,7 @@ namespace Weedwacker.GameServer.Systems.Inventory
             };
         }
 
-        private int GetVirtualItemValue(int itemId)
+        public int GetVirtualItemValue(int itemId)
         {
             switch (itemId)
             {
@@ -56,20 +57,60 @@ namespace Weedwacker.GameServer.Systems.Inventory
             }
         }
 
-        // Used by reward lists
-        public async Task<GameItem?> AddItemByParamDataAsync(ItemParamData itemParam, ActionReason reason)
-        {
-            return await AddItemByIdAsync(itemParam.id, itemParam.count, reason);
-        }
-        public async Task<List<GameItem>?> AddItemByParamDataManyAsync(IEnumerable<ItemParamData> items, ActionReason reason)
-        {
-            return await AddItemByIdManyAsync(items.Select(x => Tuple.Create(x.id, x.count)).ToList());
-        }
+        // returns updated weapon
+        public Task<WeaponItem> PromoteWeaponAsync(ulong targetWeaponGuid) => (SubInventories[ItemType.ITEM_WEAPON] as WeaponTab).PromoteWeaponAsync(targetWeaponGuid);
 
-        public async Task<GameItem?> AddItemByGuidAsync(ulong guid, int count = 1, ActionReason reason = ActionReason.None)
+        //returns updated weapon
+        public Task<WeaponItem> UpgradeWeaponAsync(ulong targetWeaponGuid, IEnumerable<ulong> foodWeaponGuidList, IEnumerable<ItemParam> itemParamList) =>
+            (SubInventories[ItemType.ITEM_WEAPON] as WeaponTab).UpgradeWeaponAsync(targetWeaponGuid, foodWeaponGuidList, itemParamList);
+
+        public async Task<bool> RemoveItemByParamData(ItemParamData itemData)
         {
-            return await AddItemByIdAsync(GuidMap[guid].ItemId, count, reason);
+            bool result = false;
+            switch (GameData.ItemDataMap[itemData.id].itemType)
+            {
+                case ItemType.ITEM_RELIQUARY:
+                    if ((SubInventories[ItemType.ITEM_RELIQUARY] as RelicTab).Items.TryGetValue(itemData.id, out GameItem? relicItem))
+                    {
+                        result = await (SubInventories[ItemType.ITEM_RELIQUARY] as RelicTab).RemoveItemAsync(relicItem, itemData.count);
+                    }
+                    break;
+                case ItemType.ITEM_WEAPON:
+                    if ((SubInventories[ItemType.ITEM_WEAPON] as WeaponTab).Items.TryGetValue(itemData.id, out GameItem? weaponItem))
+                    {
+                        result = await (SubInventories[ItemType.ITEM_WEAPON] as WeaponTab).RemoveItemAsync(weaponItem, itemData.count);
+                    }
+                    break;
+                case ItemType.ITEM_FURNITURE:
+                    if ((SubInventories[ItemType.ITEM_FURNITURE] as FurnitureTab).Items.TryGetValue(itemData.id, out GameItem? furnitureItem))
+                    {
+                        result = await (SubInventories[ItemType.ITEM_FURNITURE] as FurnitureTab).RemoveItemAsync(furnitureItem, itemData.count);
+                    }
+                    break;
+                case ItemType.ITEM_MATERIAL:
+                    if ((SubInventories[ItemType.ITEM_MATERIAL] as MaterialSubInv).TryGetItemInSubInvById(itemData.id, out GameItem? materialItem))
+                    {
+                        result = await (SubInventories[ItemType.ITEM_MATERIAL] as MaterialSubInv).RemoveItemAsync(materialItem, itemData.count);
+                    }
+                    break;
+                case ItemType.ITEM_VIRTUAL:
+                    result = await PayVirtualItemByParamDataAsync(itemData);
+                    break;
+                default:
+                    Logger.WriteErrorLine("Invalid item type!");
+                    break;
+            }
+            return result;
         }
+        // Used by reward lists
+        public Task<GameItem?> AddItemByParamDataAsync(ItemParamData itemParam, ActionReason reason) =>
+            AddItemByIdAsync(itemParam.id, itemParam.count, reason);
+        
+        public Task<List<GameItem>?> AddItemByParamDataManyAsync(IEnumerable<ItemParamData> items, ActionReason reason) =>
+            AddItemByIdManyAsync(items.Select(x => Tuple.Create(x.id, x.count)).ToList());
+
+        public Task<GameItem?> AddItemByGuidAsync(ulong guid, int count = 1, ActionReason reason = ActionReason.None) =>
+            AddItemByIdAsync(GuidMap[guid].ItemId, count, reason);
 
         public async Task<List<GameItem>?> AddItemByIdManyAsync(IEnumerable<Tuple<int, int>> idAndCount, ActionReason reason = ActionReason.None)
         {
@@ -161,22 +202,23 @@ namespace Weedwacker.GameServer.Systems.Inventory
         {
             Dictionary<MaterialItem, int> materials = new();
             Dictionary<int, int> virtualItems = new();
-            foreach (ItemParamData itemData in costItems)
-            {
-                if (GameData.ItemDataMap[itemData.id].itemType == ItemType.ITEM_MATERIAL)
+                foreach (ItemParamData itemData in costItems)
                 {
-                    var material = (SubInventories[ItemType.ITEM_MATERIAL] as MaterialSubInv).PromoteTab.Items[itemData.id];
-                    if (material.Count < itemData.count) return false; // insufficient materials
-                    else materials.Add((material as MaterialItem), itemData.count);
+                    if (GameData.ItemDataMap[itemData.id].itemType == ItemType.ITEM_MATERIAL)
+                    {
+                        if (!(SubInventories[ItemType.ITEM_MATERIAL] as MaterialSubInv).PromoteTab.Items.TryGetValue(itemData.id, out GameItem? material))
+                            return false;
+                        if (material.Count < itemData.count) return false; // insufficient materials
+                        else materials.Add(material as MaterialItem, itemData.count);
+                    }
+                    else if (GameData.ItemDataMap[itemData.id].itemType == ItemType.ITEM_VIRTUAL)
+                    {
+                        if (GetVirtualItemValue(itemData.id) < itemData.count) return false; // insufficient currency
+                        else virtualItems.Add(itemData.id, itemData.count);
+                    }
                 }
-                else if (GameData.ItemDataMap[itemData.id].itemType == ItemType.ITEM_VIRTUAL)
-                {
-                    if (GetVirtualItemValue(itemData.id) < itemData.count) return false; // insufficient currency
-                    else virtualItems.Add(itemData.id, GetVirtualItemValue(itemData.id));
-                }
-            }
             // We have the requisite amount for all items
-            foreach (MaterialItem material in materials.Keys) await RemoveItemByGuid(material.Guid, materials[material]);
+            foreach (MaterialItem material in materials.Keys) await RemoveItemByGuidAsync(material.Guid, materials[material]);
             foreach (int item in virtualItems.Keys) await PayVirtualItemByIdAsync(item, virtualItems[item]);
             return true;
         }
@@ -211,7 +253,7 @@ namespace Weedwacker.GameServer.Systems.Inventory
                     return false;
             }
         }
-        private async Task<bool> PayVirtualItemByIdAsync(int itemId, int count, ActionReason reason = ActionReason.None)
+        public async Task<bool> PayVirtualItemByIdAsync(int itemId, int count, ActionReason reason = ActionReason.None)
         {
             switch (itemId)
             {
@@ -238,10 +280,7 @@ namespace Weedwacker.GameServer.Systems.Inventory
                     return false;
             }
         }
-        public async Task<bool> PayVirtualItemByParamDataAsync(ItemParamData costItem)
-        {
-            return await PayVirtualItemByIdAsync(costItem.id, costItem.count);
-        }
+        public Task<bool> PayVirtualItemByParamDataAsync(ItemParamData costItem) => PayVirtualItemByIdAsync(costItem.id, costItem.count);
         public async Task<bool> PayVirtualItemByParamDataManyAsync(IEnumerable<ItemParamData> costItems, int quantity = 1, ActionReason reason = ActionReason.None)
         {
             // Make sure player has requisite items
@@ -257,13 +296,13 @@ namespace Weedwacker.GameServer.Systems.Inventory
             return true;
         }
 
-        public async Task<bool> RemoveItemByGuid(ulong guid, int count = 1)
+        public async Task<bool> RemoveItemByGuidAsync(ulong guid, int count = 1)
         {
-            if (GuidMap.TryGetValue(guid, out GameItem? item))
+            if (!GuidMap.ContainsKey(guid)) //TryGetValue(guid, out GameItem? item) appears to occasionally return false despite a key being present
             {
                 return false;
             }
-
+            GameItem item = GuidMap[guid];
             // Was the operation successful?
             bool result = false;
 
@@ -283,93 +322,15 @@ namespace Weedwacker.GameServer.Systems.Inventory
                     break;
             }
 
-            if (item.Count <= 0)
-            {
-                await Owner.SendPacketAsync(new PacketStoreItemDelNotify(item));
-            }
-            else
-            {
-                await Owner.SendPacketAsync(new PacketStoreItemChangeNotify(item));
-            }
-
             // Returns true on success
             return result;
         }
 
-        public async Task<bool> EquipRelic(ulong avatarGuid, ulong equipGuid)
-        {
-            Avatar.Avatar? avatar = Owner.Avatars.GetAvatarByGuid(avatarGuid);
+        public Task<bool> EquipRelic(ulong avatarGuid, ulong equipGuid) => (SubInventories[ItemType.ITEM_WEAPON] as RelicTab).EquipRelic(avatarGuid, equipGuid);
+        public Task<bool> UnequipRelicAsync(ulong avatarGuid, EquipType slot) => (SubInventories[ItemType.ITEM_WEAPON] as RelicTab).UnequipRelicAsync(avatarGuid, slot);
+        public Task<bool> EquipWeaponAsync(ulong avatarGuid, ulong equipGuid) => (SubInventories[ItemType.ITEM_WEAPON] as WeaponTab).EquipWeaponAsync(avatarGuid, equipGuid);
 
-            if (avatar != null && GuidMap.TryGetValue(equipGuid, out GameItem relic) && relic.ItemData.itemType == ItemType.ITEM_RELIQUARY)
-            {
-                ReliquaryItem asRelic = (ReliquaryItem)relic;
-                // Is it equipped ot another avatar?
-                Avatar.Avatar? otherAvatar = Owner.Avatars.Avatars.Values.Where(a => a.GetRelic(asRelic.ItemData.equipType) == asRelic && a != avatar).FirstOrDefault();
-                if (otherAvatar != null)
-                {
-                    await UnequipRelicAsync(otherAvatar.Guid, asRelic.ItemData.equipType);
-                }
-
-                if (await avatar.EquipRelic(asRelic, true))
-                {
-                    asRelic.EquippedAvatar = avatar.AvatarId;
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        public async Task<bool> EquipWeapon(ulong avatarGuid, ulong equipGuid)
-        {
-            Avatar.Avatar? avatar = Owner.Avatars.GetAvatarByGuid(avatarGuid);
-
-            if (avatar != null && GuidMap.TryGetValue(equipGuid, out GameItem weapon) && weapon.ItemData.itemType == ItemType.ITEM_WEAPON)
-            {
-                // Is it equipped at another avatar?
-                Avatar.Avatar? otherAvatar = Owner.Avatars.Avatars.Values.Where(a => a.GetWeapon() == weapon && a != avatar).FirstOrDefault();
-                if (otherAvatar != null)
-                {
-                    await UnequipWeaponAsync(otherAvatar.Guid);
-                }
-                WeaponItem asWeapon = (WeaponItem)weapon;
-                if (avatar.Data.GeneralData.weaponType == asWeapon.ItemData.weaponType)
-                {
-                    if (await avatar.EquipWeapon(asWeapon, true))
-                        asWeapon.EquippedAvatar = avatar.AvatarId;
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        public async Task<bool> UnequipRelicAsync(ulong avatarGuid, EquipType slot)
-        {
-            Avatar.Avatar? avatar = Owner.Avatars.GetAvatarByGuid(avatarGuid);
-
-            if (avatar != null && slot != EquipType.EQUIP_WEAPON)
-            {
-
-                return await avatar.UnequipRelic(slot);
-
-            }
-
-            return false;
-        }
-        public async Task<bool> UnequipWeaponAsync(ulong avatarGuid)
-        {
-            Avatar.Avatar? avatar = Owner.Avatars.GetAvatarByGuid(avatarGuid);
-
-            if (avatar != null)
-            {
-
-                return await avatar.UnequipWeapon();
-
-            }
-
-            return false;
-        }
+        public Task<bool> UnequipWeaponAsync(ulong avatarGuid) => (SubInventories[ItemType.ITEM_WEAPON] as WeaponTab).UnequipWeaponAsync(avatarGuid);
 
         public async Task OnLoadAsync(Player.Player owner)
         {

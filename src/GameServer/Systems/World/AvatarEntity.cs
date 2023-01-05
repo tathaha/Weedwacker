@@ -1,4 +1,5 @@
-﻿using System.Numerics;
+﻿using System;
+using System.Numerics;
 using Weedwacker.GameServer.Enums;
 using Weedwacker.GameServer.Packet.Send;
 using Weedwacker.GameServer.Systems.Ability;
@@ -14,6 +15,7 @@ namespace Weedwacker.GameServer.Systems.World
         public readonly Avatar.Avatar Avatar;
         public TeamInfo TeamInfo { get; private set; }
         public uint KilledBy { get; protected set; }
+        public PlayerDieType KilledType { get; protected set; }
         public override Vector3 Position { get => Avatar.Owner.Position; protected set => Avatar.Owner.Position = value; }
         public override Vector3 Rotation { get => Avatar.Owner.Rotation; protected set => Avatar.Owner.Rotation = value; }
         private float CachedLandingSpeed = 0;
@@ -27,7 +29,7 @@ namespace Weedwacker.GameServer.Systems.World
             LiveState = LifeState.LIFE_ALIVE;
             EntityId = scene.World.GetNextEntityId(EntityIdType.AVATAR);
             FightProps = avatar.FightProp;
-            WeaponItem weapon = avatar.GetWeapon();
+            WeaponItem weapon = avatar.Weapon;
             weapon.WeaponEntityId = scene.World.GetNextEntityId(EntityIdType.WEAPON);
             AbilityManager = new AvatarAbilityManager(this);
             AbilityManager.Initialize();
@@ -75,12 +77,14 @@ namespace Weedwacker.GameServer.Systems.World
         private async Task HandleFallOnGround()
         {
         }
-        public override async Task OnDeathAsync(uint killerId = default)
+
+        public override async Task OnDeathAsync(uint killerId = default, PlayerDieType dieType = PlayerDieType.KillByMonster)
         {
             KilledBy = killerId;
+            KilledType = dieType;
+
             await ClearEnergy(ChangeEnergyReason.None);
         }
-
 
         public override async Task<float> HealAsync(float amount)
         {
@@ -105,10 +109,10 @@ namespace Weedwacker.GameServer.Systems.World
         public async Task ClearEnergy(ChangeEnergyReason reason)
         {
             // Fight props.
-            FightProperty curEnergyProp = Avatar.GetCurSkillDepot().Element.CurEnergyProp;
+            FightProperty curEnergyProp = Avatar.CurSkillDepot.Element.CurEnergyProp;
 
             // Get max energy.
-            float maxEnergy = Avatar.GetCurSkillDepot().Element.MaxEnergy;
+            float maxEnergy = Avatar.CurSkillDepot.Element.MaxEnergy;
 
             // Set energy to zero.
             await Avatar.SetCurrentEnergy(0);
@@ -125,7 +129,7 @@ namespace Weedwacker.GameServer.Systems.World
         public async Task AddEnergyAsync(float amount, PropChangeReason reason, bool isFlat = false)
         {
             float curEnergy = Avatar.GetCurrentEnergy();
-            float maxEnergy = Avatar.GetCurSkillDepot().Element.MaxEnergy;
+            float maxEnergy = Avatar.CurSkillDepot.Element.MaxEnergy;
 
             // Get energy recharge.
             float energyRecharge = Avatar.FightProp[FightProperty.FIGHT_PROP_CHARGE_EFFICIENCY];
@@ -144,8 +148,8 @@ namespace Weedwacker.GameServer.Systems.World
             {
                 await Avatar.SetCurrentEnergy(newEnergy);
 
-                await Scene.BroadcastPacketAsync(new PacketAvatarFightPropUpdateNotify(Avatar, Avatar.GetCurSkillDepot().Element.CurEnergyProp));
-                await Scene.BroadcastPacketAsync(new PacketEntityFightPropChangeReasonNotify(this, Avatar.GetCurSkillDepot().Element.CurEnergyProp, newEnergy, reason));
+                await Scene.BroadcastPacketAsync(new PacketAvatarFightPropUpdateNotify(Avatar, Avatar.CurSkillDepot.Element.CurEnergyProp));
+                await Scene.BroadcastPacketAsync(new PacketEntityFightPropChangeReasonNotify(this, Avatar.CurSkillDepot.Element.CurEnergyProp, newEnergy, reason));
             }
         }
 
@@ -161,7 +165,7 @@ namespace Weedwacker.GameServer.Systems.World
                 WearingFlycloakId = (uint)Avatar.FlyCloak,
                 BornTime = (uint)Avatar.BornTime,
                 SkillDepotId = (uint)Avatar.CurrentDepotId,
-                CoreProudSkillLevel = Avatar.GetCurSkillDepot().GetCoreProudSkillLevel(),
+                CoreProudSkillLevel = Avatar.CurSkillDepot.GetCoreProudSkillLevel(),
                 /* TODO
                 AnimHash =,
                 CurVehicleInfo =,
@@ -170,10 +174,10 @@ namespace Weedwacker.GameServer.Systems.World
                 ServerBuffList =,
                 */
             };
-            foreach (var talent in Avatar.GetCurSkillDepot().Talents) avatarInfo.TalentIdList.Add((uint)talent);
-            foreach (var skill in Avatar.GetCurSkillDepot().Skills) avatarInfo.SkillLevelMap.Add((uint)skill.Key, (uint)skill.Value);
-            foreach (var proudSkill in Avatar.GetCurSkillDepot().InherentProudSkillOpens) avatarInfo.InherentProudSkillList.Add((uint)proudSkill.proudSkillId);
-            foreach (var extra in Avatar.GetCurSkillDepot().ProudSkillExtraLevelMap) avatarInfo.ProudSkillExtraLevelMap.Add((uint)extra.Key, (uint)extra.Value);
+            foreach (var talent in Avatar.CurSkillDepot.Talents) avatarInfo.TalentIdList.Add((uint)talent);
+            foreach (var skill in Avatar.CurSkillDepot.Skills) avatarInfo.SkillLevelMap.Add((uint)skill.Key, (uint)skill.Value);
+            foreach (var proudSkill in Avatar.CurSkillDepot.InherentProudSkillOpens) avatarInfo.InherentProudSkillList.Add((uint)proudSkill.proudSkillId);
+            foreach (var extra in Avatar.CurSkillDepot.ProudSkillExtraLevelMap) avatarInfo.ProudSkillExtraLevelMap.Add((uint)extra.Key, (uint)extra.Value);
             TeamInfo.TeamResonances.AsParallel().ForAll(w => avatarInfo.TeamResonanceList.Add((uint)w.teamResonanceId));
 
             foreach (EquipItem item in Avatar.Equips.Values)
@@ -216,7 +220,7 @@ namespace Weedwacker.GameServer.Systems.World
             };
             entityInfo.AnimatorParaList.Add(new AnimatorParameterValueInfoPair());
 
-            if (Scene != null && Avatar.Owner.TeamManager.GetCurrentAvatarEntity() == this)
+            if (Scene != null && Avatar.Owner.TeamManager.CurrentAvatarEntity == this)
             {
                 entityInfo.MotionInfo = GetMotionInfo();
             }
@@ -256,21 +260,21 @@ namespace Weedwacker.GameServer.Systems.World
                 AbilityEmbryo emb = new()
                 {
                     AbilityId = ++embryoId,
-                    AbilityNameHash = (uint)Utils.AbilityHash(resonance.openConfig),
-                    AbilityOverrideNameHash = (uint)GameServer.Configuration.Server.GameOptions.Constants.DEFAULT_ABILITY_NAME
+                    AbilityNameHash = Utils.AbilityHash(resonance.openConfig),
+                    AbilityOverrideNameHash = Utils.AbilityHash("Default")
                 };
 
                 abilityControlBlock.AbilityEmbryoList.Add(emb);
             }
             // Add skill depot abilities
 
-            foreach (int hash in Avatar.GetCurSkillDepot().Abilities.Keys)
+            foreach (int hash in Avatar.CurSkillDepot.Abilities.Keys)
             {
                 AbilityEmbryo emb = new AbilityEmbryo()
                 {
                     AbilityId = ++embryoId,
                     AbilityNameHash = (uint)hash,
-                    AbilityOverrideNameHash = (uint)GameServer.Configuration.Server.GameOptions.Constants.DEFAULT_ABILITY_NAME
+                    AbilityOverrideNameHash = Utils.AbilityHash("Default")
                 };
                 abilityControlBlock.AbilityEmbryoList.Add(emb);
             }
@@ -283,8 +287,8 @@ namespace Weedwacker.GameServer.Systems.World
                     AbilityEmbryo emb = new AbilityEmbryo()
                     {
                         AbilityId = ++embryoId,
-                        AbilityNameHash = (uint)Utils.AbilityHash(ability),
-                        AbilityOverrideNameHash = (uint)GameServer.Configuration.Server.GameOptions.Constants.DEFAULT_ABILITY_NAME
+                        AbilityNameHash = Utils.AbilityHash(ability),
+                        AbilityOverrideNameHash = Utils.AbilityHash("Default")
                     };
 
                     abilityControlBlock.AbilityEmbryoList.Add(emb);
